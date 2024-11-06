@@ -3,3 +3,6 @@ gensim
 cpgclientlib
 pandas
 tqdm
+torch
+torch_geometric # Go official website to install the full dependencies for cuda.
+# transformers

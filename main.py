@@ -14,7 +14,7 @@ faulthandler.enable()
 import argparse
 import gc
 import shutil
-import shutil, sys, os
+import shutil, sys, os, json
 from argparse import ArgumentParser
 from datetime import datetime
 
@@ -317,7 +317,7 @@ def embed_bert_task():
 
 @torch.no_grad()
 def output_w2v_diff():
-    is_w2v = False
+    is_w2v = True
     w2vmodel = Word2Vec.load(f"{PATHS.w2v}/{FILES.w2v}")
     vocab = list(w2vmodel.wv.index_to_key)[:100]
     if is_w2v:
@@ -390,7 +390,7 @@ def process_task(stopping, test_only=False):
         learning_rate=devign.learning_rate,
         weight_decay=devign.weight_decay,
         loss_lambda=devign.loss_lambda,
-        resume=True,
+        resume=False,
     )
     train = process.Train(model, context.epochs)
     input_dataset = data.loads(PATHS.input, PROCESS_PARAMS.dataset_ratio)
@@ -455,10 +455,204 @@ def main():
         process_task(False, True)
 
 
+# def clean_dataset():
+#     import json
+#     from src.utils.functions.parse import tokenizer
+
+#     with open(os.path.join(PATHS.raw, "dataset_plus.json"), "r", encoding="utf-8") as f:
+#         dataset_json = json.load(f)
+#     new_json = []
+#     for data in tqdm(dataset_json):
+#         code = data["func"]
+#         cleaned_code = "".join(tokenizer(code))
+#         new_json.append({"input": cleaned_code, "target": data["target"]})
+#     with open(
+#         os.path.join(PATHS.raw, "dataset_cleaned.json"), "w", encoding="utf-8"
+#     ) as f:
+#         json.dump(new_json, f, indent=4)
+
+def gpt_main():
+    import json
+    from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification
+    from datasets import load_dataset
+    import torch
+    from torch.utils.data import DataLoader
+
+    # GPT use for classification
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    train_ratio = 0.8
+    batch_size = 16
+    eval_only = True
+    resume = True
+    prompt = "Please check the following code and determine if it has any potential bug: \n"
+
+    try:
+        if not resume:
+            raise RuntimeError("Should not resume")
+        resume_dir = "output"
+        tokenizer = AutoTokenizer.from_pretrained(resume_dir)
+        model = AutoModelForSequenceClassification.from_pretrained(resume_dir, num_labels=2)
+    except Exception as e:
+        print(str(e))
+        print("No available checkpoint found, using pretrained model.")
+        tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-neo-125m')
+        model = AutoModelForSequenceClassification.from_pretrained('EleutherAI/gpt-neo-125m', num_labels=2)
+    tokenizer.pad_token = tokenizer.eos_token
+    model.config.pad_token_id = model.config.eos_token_id
+
+    # load dataset
+    with open(
+        os.path.join(PATHS.raw, "dataset_plus_cleaned.json"), "r", encoding="utf-8"
+    ) as f:
+        dataset = json.load(f)[:10000]
+    dataset = [{"input": prompt + s["input"], "target": s["target"]} for s in dataset]
+    train_size = int(len(dataset) * train_ratio)
+    from random import shuffle
+
+    shuffle(dataset)
+    train_dataset = dataset[:train_size]
+    test_dataset = dataset[train_size:]
+    with open(
+        os.path.join(PATHS.raw, "train_dataset.json"), "w", encoding="utf-8"
+    ) as f:
+        json.dump(train_dataset, f, indent=4)
+    with open(
+        os.path.join(PATHS.raw, "test_dataset.json"), "w", encoding="utf-8"
+    ) as f:
+        json.dump(test_dataset, f, indent=4)
+    train_dataset = load_dataset('json', data_files=os.path.join(PATHS.raw, "train_dataset.json"))
+    test_dataset = load_dataset('json', data_files=os.path.join(PATHS.raw, "test_dataset.json"))
+
+    train_dataset = train_dataset["train"]
+    test_dataset = test_dataset["train"]
+
+    def tokenize_function(examples):
+        # return pt
+        result = tokenizer(
+            examples["input"],
+            truncation=True,
+            max_length=512,
+            return_tensors="pt",
+            padding="max_length",
+        )
+        labels = examples["target"]
+        labels_tensor = torch.tensor(labels, dtype=torch.long)
+        return {**result, "labels": labels_tensor}
+
+    train_dataset = train_dataset.map(tokenize_function, batched=True)
+    test_dataset = test_dataset.map(tokenize_function, batched=True)
+
+    train_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', "labels"])
+    test_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', "labels"])
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size * 2, shuffle=False)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=5e-5)
+    model.train()
+    model.to(device)
+    
+    if not eval_only:
+        for epoch in range(4):
+            t_bar = tqdm(total=len(train_loader), desc=f"Epoch {epoch}")
+            total_loss = 0
+            correct, total = 0, 0
+            for batch in train_loader:
+                optimizer.zero_grad()
+                input_ids = batch["input_ids"].to(device)
+                attention_mask = batch["attention_mask"].to(device)
+                labels = batch["labels"].to(device)
+                output = model(input_ids, attention_mask=attention_mask, labels=labels)
+                loss = output.loss
+                loss.backward()
+                optimizer.step()
+                correct += (output.logits.argmax(dim=-1) == labels).sum().item()
+                total += len(labels)
+                acc = correct / total
+                total_loss += loss.item()
+                t_bar.set_postfix_str(f"Loss: {total_loss / total:.3f}, Acc: {acc:.3f}")
+                t_bar.update()
+            model.save_pretrained("output")
+
+    model.eval()
+    correct, total = 0, 0
+    confuse_matrix = [[0, 0] for _ in range(2)]
+    with torch.no_grad():
+        for batch in tqdm(test_loader, desc="Test"):
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device)
+            output = model(input_ids, attention_mask=attention_mask, labels=labels)
+            correct += (output.logits.argmax(dim=-1) == labels).sum().item()
+            total += len(labels)
+            for i in range(len(labels)):
+                confuse_matrix[labels[i].item()][output.logits[i].argmax(dim=-1).item()] += 1
+    acc = correct / total
+    print(f"Test accuracy: {acc:.3f}")
+    print("Confuse matrix:")
+    print(confuse_matrix)
+
+def clean_dataset_multiprocess():
+    import subprocess
+    # 获取原始数据集文件路径
+    dataset_path = os.path.join(PATHS.raw, "dataset_small.json")
+    
+    num_chunks = os.cpu_count() - 1  # 获取可用的 CPU 核心数减去 2，作为进程数
+    chunk_size = os.path.getsize(dataset_path) // num_chunks  # 每个 chunk 的大小（可以根据需要调整）
+
+    # Step 1: 将数据集分割为多个文件
+    print(f"Splitting dataset into {num_chunks} chunks..., every chunk size: {chunk_size}")
+    os.makedirs(os.path.join(PATHS.raw, "chunks"), exist_ok=True)
+    os.makedirs(os.path.join(PATHS.raw, "tem"), exist_ok=True)
+
+    # 读取整个数据集并将其分割成多个较小的 chunk 文件
+    with open(dataset_path, "r", encoding="utf-8") as f:
+        dataset = json.load(f)
+
+    # 将数据集按 chunk 数量分割
+    chunked_datasets = []
+    for i in range(num_chunks):
+        chunk = dataset[i::num_chunks]  # 选择每个 chunk
+        chunk_file = os.path.join(PATHS.raw, "chunks", f"dataset_chunk_{i}.json")
+        with open(chunk_file, "w", encoding="utf-8") as out_file:
+            json.dump(chunk, out_file, indent=4)
+        chunked_datasets.append(chunk_file)
+
+    # Step 2: 使用 subprocess 启动多个进程执行 clean_dataset
+    processes = []
+    for i, chunk_file in enumerate(chunked_datasets):
+        # 调用 clean_dataset.py 并传递 chunk 文件和其索引作为参数
+        command = [
+            sys.executable, "clean_dataset.py", "--chunk_file", chunk_file, "--chunk_idx", str(i)
+        ]
+        process = subprocess.Popen(command)
+        processes.append(process)
+
+    # 等待所有进程完成
+    for process in processes:
+        process.communicate()
+
+    # Step 3: 合并所有处理后的结果
+    print("Merging chunks into one cleaned dataset...")
+    combined_json = []
+    for i in range(num_chunks):
+        chunk_file = os.path.join(PATHS.raw, "tem", f"dataset_cleaned_chunk_{i}.json")
+        with open(chunk_file, "r", encoding="utf-8") as f:
+            combined_json.extend(json.load(f))
+        os.remove(chunk_file)
+    shutil.rmtree(os.path.join(PATHS.raw, "tem"))
+    shutil.rmtree(os.path.join(PATHS.raw, "chunks"))
+
+    # 将合并后的数据保存为最终的 cleaned 数据集
+    with open(os.path.join(PATHS.raw, "dataset_small_cleaned.json"), "w", encoding="utf-8") as f:
+        json.dump(combined_json, f, indent=4)
+
 if __name__ == "__main__":
     # main()
     # create_task()
     # embed_task()
-    embed_bert_task()
-    # output_w2v_diff()
+    # embed_bert_task()
+    output_w2v_diff()
     # process_task(True, False)
+    # gpt_main()

@@ -72,7 +72,12 @@ class NodesEmbedding:
             # Get node's code
             node_code = node.get_code()
             # Tokenize the code
-            tokenized_code = tokenizer(node_code, True)
+            try:
+                tokenized_code = tokenizer(node_code, True)
+            except Exception as e:
+                print(node_code)
+                print(e)
+                continue
             if not tokenized_code:
                 # print(f"Dropped node {node}: tokenized code is empty.")
                 msg = f"Empty TOKENIZED from node CODE {node_code}"

@@ -22,7 +22,7 @@
         "data_size": -1
     },
     "paths": {
-        "cpg": "D:/图神经网络/data/cpg/",
+        "cpg": "data/cpg/",
         "joern": "data/joern/",
         "raw": "data/raw/",
         "input": "data/input/",

@@ -19,7 +19,7 @@
      |_ "CFG": see cfg-for-funcs script
      |_ "PDG": see pdg-for-funcs script
  */
-// 适配v1.0.111
+// 适配v1.0.111, java11。需要copy到joern目录下执行
 import scala.jdk.CollectionConverters._
 
 import io.circe.syntax._
