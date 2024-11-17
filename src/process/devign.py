@@ -25,8 +25,8 @@ class Devign(Step):
         self.wd = weight_decay
         self.ll = loss_lambda
         log.log_info('devign', f"LR: {self.lr}; WD: {self.wd}; LL: {self.ll};")
-        # _model = Net(**model, max_nodes=max_nodes, device=device)
-        _model = Net(**model, device=device)
+        _model = Net(**model, max_nodes=max_nodes, device=device)
+        # _model = Net(**model, device=device)
         if resume and os.path.exists(self.path):
             try:
                 _model.load(self.path)

@@ -31,12 +31,12 @@ class Readout(nn.Module):
         self.max_nodes = max_nodes
         self.conv1_size = {
             "in_channels": self.max_nodes,
-            "out_channels": 64,
+            "out_channels": 128,
             "kernel_size": 3,
             "padding": 1,
         }
         self.conv2_size = {
-            "in_channels": 64,
+            "in_channels": 128,
             "out_channels": 16,
             "kernel_size": 2,
             "padding": 1,
@@ -86,61 +86,61 @@ class Net(nn.Module):
             gated_graph_conv_args["out_channels"] = emb_size
         self.inp_mlp = nn.Sequential(
             nn.Linear(emb_size, gated_graph_conv_args["out_channels"]),
-            nn.ReLU(),
-            nn.Linear(
-                gated_graph_conv_args["out_channels"],
-                gated_graph_conv_args["out_channels"],
-            ),
+            # nn.ReLU(),
+            # nn.Linear(
+            #     gated_graph_conv_args["out_channels"],
+            #     gated_graph_conv_args["out_channels"],
+            # ),
             nn.ReLU(),
         ).to(device)
         self.ggc = GatedGraphConv(**gated_graph_conv_args).to(device)
 
-        # self.readout = Readout(emb_size, gated_graph_conv_args["out_channels"], max_nodes).to(device)
+        self.readout = Readout(emb_size, gated_graph_conv_args["out_channels"], max_nodes).to(device)
 
-        self.k = 5
-        self.l_o1 = nn.Linear(
-            gated_graph_conv_args["out_channels"] * self.k,
-            gated_graph_conv_args["out_channels"],
-        ).to(device)
-        self.l_o2 = nn.Linear(
-            gated_graph_conv_args["out_channels"],
-            gated_graph_conv_args["out_channels"],
-        ).to(device)
-        self.l_o = nn.Linear(gated_graph_conv_args["out_channels"] * 2, 2).to(device)
-        self.dropout = nn.Dropout(p=0.1)
+        # self.k = 5
+        # self.l_o1 = nn.Linear(
+        #     gated_graph_conv_args["out_channels"] * self.k,
+        #     gated_graph_conv_args["out_channels"],
+        # ).to(device)
+        # self.l_o2 = nn.Linear(
+        #     gated_graph_conv_args["out_channels"],
+        #     gated_graph_conv_args["out_channels"],
+        # ).to(device)
+        # self.l_o = nn.Linear(gated_graph_conv_args["out_channels"] * 2, 2).to(device)
+        # self.dropout = nn.Dropout(p=0.1)
 
-        self.aggr = Aggregation().to(device)
+        # self.aggr = Aggregation().to(device)
 
-        self.conv_l1 = torch.nn.Conv1d(
-            gated_graph_conv_args["out_channels"],
-            gated_graph_conv_args["out_channels"],
-            3,
-        ).to(device)
-        self.maxpool1 = torch.nn.MaxPool1d(3, stride=2).to(device)
-        self.conv_l2 = torch.nn.Conv1d(
-            gated_graph_conv_args["out_channels"],
-            gated_graph_conv_args["out_channels"],
-            1,
-        ).to(device)
-        self.maxpool2 = torch.nn.MaxPool1d(2, stride=2).to(device)
+        # self.conv_l1 = torch.nn.Conv1d(
+        #     gated_graph_conv_args["out_channels"],
+        #     gated_graph_conv_args["out_channels"],
+        #     3,
+        # ).to(device)
+        # self.maxpool1 = torch.nn.MaxPool1d(3, stride=2).to(device)
+        # self.conv_l2 = torch.nn.Conv1d(
+        #     gated_graph_conv_args["out_channels"],
+        #     gated_graph_conv_args["out_channels"],
+        #     1,
+        # ).to(device)
+        # self.maxpool2 = torch.nn.MaxPool1d(2, stride=2).to(device)
 
-        self.concat_dim = gated_graph_conv_args["out_channels"] * 2
-        self.conv_l1_for_concat = torch.nn.Conv1d(
-            self.concat_dim, self.concat_dim, 3
-        ).to(device)
-        self.maxpool1_for_concat = torch.nn.MaxPool1d(3, stride=2).to(device)
-        self.conv_l2_for_concat = torch.nn.Conv1d(
-            self.concat_dim, self.concat_dim, 1
-        ).to(device)
-        self.maxpool2_for_concat = torch.nn.MaxPool1d(2, stride=2).to(device)
+        # self.concat_dim = gated_graph_conv_args["out_channels"] * 2
+        # self.conv_l1_for_concat = torch.nn.Conv1d(
+        #     self.concat_dim, self.concat_dim, 3
+        # ).to(device)
+        # self.maxpool1_for_concat = torch.nn.MaxPool1d(3, stride=2).to(device)
+        # self.conv_l2_for_concat = torch.nn.Conv1d(
+        #     self.concat_dim, self.concat_dim, 1
+        # ).to(device)
+        # self.maxpool2_for_concat = torch.nn.MaxPool1d(2, stride=2).to(device)
 
-        self.mlp_z = nn.Linear(in_features=self.concat_dim, out_features=2).to(device)
-        self.mlp_y = nn.Linear(
-            in_features=gated_graph_conv_args["out_channels"], out_features=2
-        ).to(device)
-        # self.sigmoid = nn.Sigmoid()
+        # self.mlp_z = nn.Linear(in_features=self.concat_dim, out_features=2).to(device)
+        # self.mlp_y = nn.Linear(
+        #     in_features=gated_graph_conv_args["out_channels"], out_features=2
+        # ).to(device)
+        # # self.sigmoid = nn.Sigmoid()
 
-        # self.ln_out = nn.Linear(gated_graph_conv_args["out_channels"], 2).to(device)
+        # # self.ln_out = nn.Linear(gated_graph_conv_args["out_channels"], 2).to(device)
         self.ln_out = nn.Sequential(
             # nn.Linear(
             #     gated_graph_conv_args["out_channels"],
@@ -152,11 +152,11 @@ class Net(nn.Module):
 
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
-        x = self.inp_mlp(x)
+        # x = self.inp_mlp(x)
         x = self.ggc(x, edge_index)
-        # x = self.readout(x, data.x)
-        x = global_mean_pool(x, data.batch)
-        x = self.ln_out(x)
+        x = self.readout(x, data.x)
+        # x = global_mean_pool(x, data.batch)
+        # x = self.ln_out(x)
         return x
         data_x = self.inp_mlp(data.x)
         x, edge_index = data_x, data.edge_index

@@ -14,7 +14,7 @@ class Metrics:
 
     def transform(self):
         self.series = pd.Series(self.scores)
-        self.predicts = self.series.apply(lambda x: 1 if x[0] > x[1] else 0)
+        self.predicts = self.series.apply(lambda x: 1 if x[1] > x[0] else 0)
         self.predicts.reset_index(drop=True, inplace=True)
 
     def __str__(self):

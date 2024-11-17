@@ -394,6 +394,12 @@ def process_task(stopping, test_only=False):
     )
     train = process.Train(model, context.epochs)
     input_dataset = data.loads(PATHS.input, PROCESS_PARAMS.dataset_ratio)
+    positive_cnt = 0
+    for i in range(len(input_dataset)):
+        target = input_dataset.iloc[i].target
+        if target == 1:
+            positive_cnt += 1
+    tqdm.write(f"Positive ratio: {positive_cnt / len(input_dataset)}")
     # split the dataset and pass to DataLoader with batch size
     train_loader, val_loader, test_loader = list(
         map(
@@ -483,6 +489,7 @@ def gpt_main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     train_ratio = 0.8
     batch_size = 16
+    gradient_accumulation_steps = 1
     eval_only = True
     resume = True
     prompt = "Please check the following code and determine if it has any potential bug: \n"
@@ -501,26 +508,27 @@ def gpt_main():
     tokenizer.pad_token = tokenizer.eos_token
     model.config.pad_token_id = model.config.eos_token_id
 
-    # load dataset
-    with open(
-        os.path.join(PATHS.raw, "dataset_plus_cleaned.json"), "r", encoding="utf-8"
-    ) as f:
-        dataset = json.load(f)[:10000]
-    dataset = [{"input": prompt + s["input"], "target": s["target"]} for s in dataset]
-    train_size = int(len(dataset) * train_ratio)
-    from random import shuffle
+    if not resume:
+        # load dataset
+        with open(
+            os.path.join(PATHS.raw, "dataset_plus_cleaned.json"), "r", encoding="utf-8"
+        ) as f:
+            dataset = json.load(f)[:100000]
+        dataset = [{"input": prompt + s["input"], "target": s["target"]} for s in dataset]
+        train_size = int(len(dataset) * train_ratio)
+        from random import shuffle
 
-    shuffle(dataset)
-    train_dataset = dataset[:train_size]
-    test_dataset = dataset[train_size:]
-    with open(
-        os.path.join(PATHS.raw, "train_dataset.json"), "w", encoding="utf-8"
-    ) as f:
-        json.dump(train_dataset, f, indent=4)
-    with open(
-        os.path.join(PATHS.raw, "test_dataset.json"), "w", encoding="utf-8"
-    ) as f:
-        json.dump(test_dataset, f, indent=4)
+        shuffle(dataset)
+        train_dataset = dataset[:train_size]
+        test_dataset = dataset[train_size:]
+        with open(
+            os.path.join(PATHS.raw, "train_dataset.json"), "w", encoding="utf-8"
+        ) as f:
+            json.dump(train_dataset, f, indent=4)
+        with open(
+            os.path.join(PATHS.raw, "test_dataset.json"), "w", encoding="utf-8"
+        ) as f:
+            json.dump(test_dataset, f, indent=4)
     train_dataset = load_dataset('json', data_files=os.path.join(PATHS.raw, "train_dataset.json"))
     test_dataset = load_dataset('json', data_files=os.path.join(PATHS.raw, "test_dataset.json"))
 
@@ -550,29 +558,36 @@ def gpt_main():
     test_loader = DataLoader(test_dataset, batch_size=batch_size * 2, shuffle=False)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=5e-5)
+    loss_func = torch.nn.CrossEntropyLoss()
     model.train()
     model.to(device)
     
     if not eval_only:
+        step = 0
         for epoch in range(4):
             t_bar = tqdm(total=len(train_loader), desc=f"Epoch {epoch}")
             total_loss = 0
             correct, total = 0, 0
             for batch in train_loader:
-                optimizer.zero_grad()
+                step += 1
                 input_ids = batch["input_ids"].to(device)
                 attention_mask = batch["attention_mask"].to(device)
                 labels = batch["labels"].to(device)
                 output = model(input_ids, attention_mask=attention_mask, labels=labels)
-                loss = output.loss
+                loss = loss_func(output.logits, labels.long()) / gradient_accumulation_steps
                 loss.backward()
-                optimizer.step()
+                # loss = output.loss / gradient_accumulation_steps
+                # loss.backward()
+                if step % gradient_accumulation_steps == 0:
+                    optimizer.step()
+                    optimizer.zero_grad()
                 correct += (output.logits.argmax(dim=-1) == labels).sum().item()
                 total += len(labels)
                 acc = correct / total
-                total_loss += loss.item()
+                total_loss += loss.item() * gradient_accumulation_steps
                 t_bar.set_postfix_str(f"Loss: {total_loss / total:.3f}, Acc: {acc:.3f}")
                 t_bar.update()
+            optimizer.zero_grad()
             model.save_pretrained("output")
 
     model.eval()
@@ -651,8 +666,8 @@ def clean_dataset_multiprocess():
 if __name__ == "__main__":
     # main()
     # create_task()
-    # embed_task()
+    embed_task()
     # embed_bert_task()
-    output_w2v_diff()
+    # output_w2v_diff()
     # process_task(True, False)
     # gpt_main()
